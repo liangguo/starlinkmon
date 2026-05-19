@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Starlink Monitor</title>
+<link rel="stylesheet" href="lib/uPlot.min.css">
+<script src="lib/uPlot.min.js"></script>
+<script type="importmap">
+{"imports":{"three":"./lib/three.module.min.js","three/addons/":"./lib/"}}
+</script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+.tabs { display: flex; background: #16213e; border-bottom: 1px solid #0f3460; }
+.tab { padding: 12px 24px; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; font-size: 14px; }
+.tab:hover { background: #1a2a4a; }
+.tab.active { border-bottom-color: #4CAF50; color: #4CAF50; }
+.content { flex: 1; overflow: hidden; padding: 20px; display: flex; flex-direction: column; }
+.panel { display: none !important; flex: 1; overflow-y: auto; }
+.panel.active { display: block !important; }
+#network.active { display: flex !important; flex-direction: column; overflow: hidden; }
+.stats-row { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.stat-card { background: #16213e; border-radius: 8px; padding: 12px 16px; border: 1px solid #0f3460; flex: 1; min-width: 120px; }
+.stat-card .label { font-size: 11px; color: #888; text-transform: uppercase; }
+.stat-card .value { font-size: 22px; font-weight: 600; margin-top: 2px; font-family: 'SF Mono', 'Menlo', monospace; min-width: 80px; display: inline-block; }
+.stat-card .unit { font-size: 12px; color: #888; }
+.chart-box { margin-bottom: 16px; }
+.chart-title { font-size: 12px; color: #888; margin-bottom: 4px; }
+.time-selector { margin-bottom: 12px; display: flex; gap: 8px; }
+.time-btn { padding: 4px 12px; border-radius: 4px; border: 1px solid #0f3460; background: #16213e; color: #e0e0e0; cursor: pointer; font-size: 12px; }
+.time-btn.active { background: #4CAF50; border-color: #4CAF50; color: #fff; }
+#heatmap-canvas { width: 100%; max-width: 500px; aspect-ratio: 1; border-radius: 50%; display: block; margin: 0 auto; }
+.event-list { list-style: none; }
+.event-list li { padding: 10px 16px; border-bottom: 1px solid #0f3460; display: grid; grid-template-columns: 30% 20% 50%; align-items: center; font-size: 13px; }
+.event-header { display: grid; grid-template-columns: 30% 20% 50%; padding: 8px 16px; font-size: 12px; color: #888; text-transform: uppercase; border-bottom: 1px solid #0f3460; }
+.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.info-item { padding: 12px; background: #16213e; border-radius: 6px; border: 1px solid #0f3460; }
+.info-item .label { font-size: 12px; color: #888; }
+.info-item .value { font-size: 16px; margin-top: 2px; }
+.settings-item { padding: 16px; background: #16213e; border-radius: 8px; margin-bottom: 12px; border: 1px solid #0f3460; }
+.uplot { margin: 0 auto; }
+.uplot .u-legend { font-family: 'SF Mono', 'Menlo', monospace; font-size: 12px; }
+.uplot .u-legend .u-series { display: inline-block; min-width: 130px; }
+.uplot .u-legend .u-series .u-value { display: inline-block; min-width: 50px; text-align: left; }
+.uplot .u-legend .u-series:first-child .u-value { min-width: 70px; }
+</style>
+</head>
+<body>
+<div class="tabs">
+  <div class="tab active" data-tab="network">Network</div>
+  <div class="tab" data-tab="heatmap">Obstruction Map</div>
+  <div class="tab" data-tab="events">Events</div>
+  <div class="tab" data-tab="info">Info</div>
+  <div class="tab" data-tab="settings">Settings</div>
+</div>
+<div class="content">
+  <div class="panel active" id="network">
+    <div style="flex-shrink:0;">
+      <div class="stats-row">
+        <div class="stat-card"><div class="label">Download</div><div class="value" id="dl">--</div><div class="unit">Mbps</div></div>
+        <div class="stat-card"><div class="label">Upload</div><div class="value" id="ul">--</div><div class="unit">Mbps</div></div>
+        <div class="stat-card"><div class="label">Latency</div><div class="value" id="latency">--</div><div class="unit">ms</div></div>
+      <div class="stat-card" id="router-latency-card" style="display:none"><div class="label">Router</div><div class="value" id="router-latency">--</div><div class="unit">ms</div></div>
+        <div class="stat-card"><div class="label">Drop</div><div class="value" id="drop">--</div><div class="unit">%</div></div>
+        <div class="stat-card"><div class="label">Obstruction</div><div class="value" id="obstruction">--</div><div class="unit">%</div></div>
+      </div>
+      <div class="time-selector">
+        <button class="time-btn active" data-mins="15">15m</button>
+        <button class="time-btn" data-mins="60">1h</button>
+        <button class="time-btn" data-mins="360">6h</button>
+        <button class="time-btn" data-mins="1440">24h</button>
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto;">
+      <div class="chart-box"><div class="chart-title">Bandwidth (Mbps)</div><div id="chart-bw"></div></div>
+      <div class="chart-box"><div class="chart-title">Latency (ms) — <span style="color:#FF9800">Starlink</span> / <span style="color:#29B6F6">Router</span></div><div id="chart-latency"></div></div>
+      <div class="chart-box"><div class="chart-title">Packet Loss (%)</div><div id="chart-drop"></div></div>
+      <div class="chart-box"><div class="chart-title">Obstruction (%)</div><div id="chart-obstruction"></div></div>
+    </div>
+  </div>
+
+  <div class="panel" id="heatmap">
+    <div id="three-container" style="width:100%;height:100%;"></div>
+  </div>
+
+  <div class="panel" id="events">
+    <h3 style="margin-bottom:12px;">Recent Outages</h3>
+    <div class="event-header"><span>Time</span><span>Duration</span><span>Event</span></div>
+    <ul class="event-list" id="event-list"></ul>
+  </div>
+
+  <div class="panel" id="info">
+    <h3 style="margin-bottom:12px;">Device Information</h3>
+    <div class="info-grid" id="info-grid"></div>
+  </div>
+
+  <div class="panel" id="settings">
+    <div class="settings-item"><div class="label">Poll Interval</div><div class="value">Status: 1s / History: 60s</div></div>
+    <div class="settings-item"><div class="label">Starlink Address</div><div class="value">192.168.100.1:9200</div></div>
+    <div class="settings-item"><div class="label">Data Retention</div><div class="value">Performance: 24h / Events: 176h</div></div>
+    <div class="settings-item"><div class="label">Version</div><div class="value">starlinkmon v0.1.0</div></div>
+  </div>
+</div>
+
+<script type="module">
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
+
+let perfData = [];
+let selectedMins = 15;
+let charts = {};
+
+const darkTheme = {
+  background: '#16213e',
+  gridColor: '#0f3460',
+  textColor: '#888',
+};
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+    if (tab.dataset.tab === 'network') { destroyCharts(); rebuildCharts(); }
+    if (tab.dataset.tab === 'heatmap') loadHeatmap();
+    if (tab.dataset.tab === 'events') loadEvents();
+    if (tab.dataset.tab === 'info') loadInfo();
+  });
+});
+
+document.querySelectorAll('.time-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedMins = parseInt(btn.dataset.mins);
+    destroyCharts();
+    rebuildCharts();
+  });
+});
+
+function getChartWidth() {
+  return document.getElementById('chart-bw').parentElement.clientWidth - 24;
+}
+
+function makeOpts(title, seriesDefs, height) {
+  const w = getChartWidth();
+  return {
+    width: w,
+    height: height || 150,
+    cursor: { show: true },
+    scales: { x: { time: true }, y: { auto: true } },
+    axes: [
+      { stroke: darkTheme.textColor, grid: { stroke: darkTheme.gridColor, width: 0.5 }, ticks: { stroke: darkTheme.gridColor },
+        values: (u, vals) => vals.map(v => { const d = new Date(v*1000); return d.toTimeString().slice(0,5); })
+      },
+      { stroke: darkTheme.textColor, grid: { stroke: darkTheme.gridColor, width: 0.5 }, ticks: { stroke: darkTheme.gridColor },
+        size: 55, values: (u, vals) => vals.map(v => v.toFixed(1).padStart(7))
+      },
+    ],
+    series: [
+      { value: (u, v) => v == null ? '\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0' : new Date(v*1000).toTimeString().slice(0,8) },
+      ...seriesDefs.map(s => ({ ...s, value: (u, v) => v == null ? '     ' : v.toFixed(1).padStart(5) })),
+    ],
+  };
+}
+
+function getFilteredData() {
+  if (perfData.length === 0) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - selectedMins * 60;
+  const filtered = perfData.filter(p => p.ts >= cutoff);
+  if (filtered.length < 2) return null;
+  return filtered;
+}
+
+function rebuildCharts() {
+  const data = getFilteredData();
+  if (!data) return;
+
+  const ts = data.map(d => d.ts);
+  const dl = data.map(d => d.dl);
+  const ul = data.map(d => d.ul);
+  const lat = data.map(d => d.latency);
+  const rlat = data.map(d => d.router_latency || null);
+  const drop = data.map(d => d.drop_rate * 100);
+  const obst = data.map(d => d.obstruction || 0);
+
+  if (charts.bw) {
+    charts.bw.setData([ts, dl, ul]);
+    charts.latency.setData([ts, lat, rlat]);
+    charts.drop.setData([ts, drop]);
+    charts.obstruction.setData([ts, obst]);
+  } else {
+    document.getElementById('chart-bw').innerHTML = '';
+    document.getElementById('chart-latency').innerHTML = '';
+    document.getElementById('chart-drop').innerHTML = '';
+    document.getElementById('chart-obstruction').innerHTML = '';
+
+    charts.bw = new uPlot(
+      makeOpts('Bandwidth', [
+        { label: 'Download', stroke: '#4CAF50', width: 1.5 },
+        { label: 'Upload', stroke: '#42A5F5', width: 1.5 },
+      ]),
+      [ts, dl, ul],
+      document.getElementById('chart-bw')
+    );
+    charts.latency = new uPlot(
+      makeOpts('Latency', [
+        { label: 'Starlink', stroke: '#FF9800', width: 1.5 },
+        { label: 'Router', stroke: '#29B6F6', width: 1.5 },
+      ]),
+      [ts, lat, rlat],
+      document.getElementById('chart-latency')
+    );
+    charts.drop = new uPlot(
+      makeOpts('Drop', [
+        { label: 'Loss %', stroke: '#F44336', width: 1.5, fill: 'rgba(244,67,54,0.1)' },
+      ]),
+      [ts, drop],
+      document.getElementById('chart-drop')
+    );
+    charts.obstruction = new uPlot(
+      makeOpts('Obstruction', [
+        { label: 'Obstr %', stroke: '#AB47BC', width: 1.5, fill: 'rgba(171,71,188,0.1)' },
+      ]),
+      [ts, obst],
+      document.getElementById('chart-obstruction')
+    );
+  }
+}
+
+function destroyCharts() {
+  Object.values(charts).forEach(c => c.destroy());
+  charts = {};
+}
+
+async function updateStatus() {
+  try {
+    const s = await invoke('get_status');
+    if (!s.connected) return;
+    document.getElementById('dl').textContent = s.downlink_mbps.toFixed(1);
+    document.getElementById('ul').textContent = s.uplink_mbps.toFixed(1);
+    document.getElementById('latency').textContent = s.latency_ms.toFixed(0);
+    document.getElementById('drop').textContent = (s.drop_rate * 100).toFixed(2);
+    document.getElementById('obstruction').textContent = s.obstruction_pct.toFixed(2);
+    if (s.router_ping_latency_ms != null) {
+      document.getElementById('router-latency-card').style.display = '';
+      document.getElementById('router-latency').textContent = s.router_ping_latency_ms.toFixed(0);
+    } else {
+      document.getElementById('router-latency-card').style.display = 'none';
+    }
+  } catch(e) {}
+}
+
+async function loadPerfData() {
+  try { perfData = await invoke('get_perf_history'); } catch(e) {}
+  if (document.querySelector('.tab.active').dataset.tab === 'network' && selectedMins < 60) rebuildCharts();
+}
+
+async function loadEvents() {
+  try {
+    const outages = await invoke('get_outages');
+    const list = document.getElementById('event-list');
+    list.innerHTML = outages.map(o => `
+      <li><span>${o.time}</span><span style="color:#FF9800">${o.duration_s.toFixed(1)}s</span><span>${o.cause}</span></li>
+    `).join('');
+    if (outages.length === 0) list.innerHTML = '<li style="color:#888;justify-content:center">No recent outages</li>';
+  } catch(e) {}
+}
+
+let heatmapData = null;
+let threeScene = null;
+
+async function loadHeatmap() {
+  try {
+    heatmapData = await invoke('get_obstruction_map');
+    if (!threeScene) initThreeScene();
+    else updateObstructionDome();
+  } catch(e) {}
+}
+
+async function initThreeScene() {
+  const THREE = await import('three');
+  const { OrbitControls } = await import('three/addons/OrbitControls.js');
+
+  const container = document.getElementById('three-container');
+  const w = container.clientWidth, h = container.clientHeight;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a1a);
+
+  const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
+  camera.position.set(3, 2.5, 3);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(w, h);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.05;
+  controls.minDistance = 1.5;
+  controls.maxDistance = 8;
+
+  // Lighting
+  scene.add(new THREE.AmbientLight(0x404060, 2));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+  dirLight.position.set(2, 4, 3);
+  scene.add(dirLight);
+
+  // Ground plane
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(2, 64),
+    new THREE.MeshStandardMaterial({ color: 0x1a2a1a, roughness: 0.9 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -0.01;
+  scene.add(ground);
+
+  // Dish antenna
+  const dishGroup = new THREE.Group();
+  // Base
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.15, 0.05, 16),
+    new THREE.MeshStandardMaterial({ color: 0x333333 })
+  );
+  dishGroup.add(base);
+  // Pole
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8),
+    new THREE.MeshStandardMaterial({ color: 0x555555 })
+  );
+  pole.position.y = 0.22;
+  dishGroup.add(pole);
+  // Dish face
+  const dishGeom = new THREE.SphereGeometry(0.2, 32, 16, 0, Math.PI * 2, 0, Math.PI / 3);
+  const dishMesh = new THREE.Mesh(
+    dishGeom,
+    new THREE.MeshStandardMaterial({ color: 0xeeeeee, side: THREE.DoubleSide })
+  );
+  dishMesh.position.y = 0.45;
+  dishMesh.rotation.x = Math.PI;
+  dishGroup.add(dishMesh);
+  scene.add(dishGroup);
+
+  // Obstruction dome (hemisphere showing sky view)
+  const domeGeom = new THREE.SphereGeometry(2, 64, 32, 0, Math.PI * 2, 0, Math.PI / 2);
+  const domeMat = new THREE.MeshBasicMaterial({
+    transparent: true, opacity: 0.3, side: THREE.BackSide, wireframe: true, color: 0x224422
+  });
+  const dome = new THREE.Mesh(domeGeom, domeMat);
+  dome.position.y = 0;
+  scene.add(dome);
+
+  // Obstruction patches
+  const patchGroup = new THREE.Group();
+  scene.add(patchGroup);
+
+  threeScene = { scene, camera, renderer, controls, patchGroup, THREE, container };
+  updateObstructionDome();
+
+  // Animate
+  function animate() {
+    if (document.querySelector('.tab.active').dataset.tab !== 'heatmap') {
+      requestAnimationFrame(animate);
+      return;
+    }
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(animate);
+  }
+  animate();
+
+  // Resize
+  const ro = new ResizeObserver(() => {
+    const w = container.clientWidth, h = container.clientHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  });
+  ro.observe(container);
+}
+
+function updateObstructionDome() {
+  if (!threeScene || !heatmapData || heatmapData.num_rows === 0) return;
+  const { patchGroup, THREE } = threeScene;
+
+  // Clear old patches
+  while (patchGroup.children.length) patchGroup.remove(patchGroup.children[0]);
+
+  const rows = heatmapData.num_rows, cols = heatmapData.num_cols;
+  const radius = 2;
+  const cx = cols / 2, cy = rows / 2, maxR = cols / 2;
+
+  for (let r = 0; r < rows; r += 2) {
+    for (let c = 0; c < cols; c += 2) {
+      const dx = c - cx, dy = r - cy;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > maxR) continue;
+
+      const snr = heatmapData.snr[r * cols + c];
+      if (snr < 0) continue; // no data, skip
+
+      // Map grid position to hemisphere
+      const azimuth = Math.atan2(dx, -dy);
+      const elevation = (1 - dist / maxR) * (Math.PI / 2);
+
+      const x = radius * Math.cos(elevation) * Math.sin(azimuth);
+      const z = radius * Math.cos(elevation) * Math.cos(azimuth);
+      const y = radius * Math.sin(elevation);
+
+      let color;
+      if (snr === 0) color = 0xff2222; // obstructed
+      else color = new THREE.Color().setHSL(0.3, 0.8, snr * 0.4 + 0.2).getHex(); // green gradient
+
+      const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.03, 8, 8),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: snr === 0 ? 0.9 : 0.6 })
+      );
+      dot.position.set(x, y, z);
+      patchGroup.add(dot);
+    }
+  }
+}
+
+async function loadInfo() {
+  try {
+    const s = await invoke('get_status');
+    const grid = document.getElementById('info-grid');
+    const fmt = (s) => Math.floor(s/86400) > 0 ? `${Math.floor(s/86400)}d ${Math.floor((s%86400)/3600)}h` : `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+    grid.innerHTML = [
+      ['Status', s.connected ? '🟢 Connected' : '🔴 Disconnected'],
+      ['Hardware', s.hardware_version],
+      ['Software', s.software_version],
+      ['Country', s.country_code],
+      ['Ethernet', s.eth_speed_mbps + ' Mbps'],
+      ['GPS Satellites', s.gps_sats + (s.gps_valid ? ' ✓' : ' ✗')],
+      ['Azimuth', s.azimuth_deg.toFixed(1) + '°'],
+      ['Elevation', s.elevation_deg.toFixed(1) + '°'],
+      ['SNR OK', s.snr_above_noise ? 'Yes' : 'No'],
+      ['Uptime', fmt(s.uptime_s)],
+    ].map(([l, v]) => `<div class="info-item"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
+  } catch(e) {}
+}
+
+// Init
+async function init() {
+  await updateStatus();
+  await loadPerfData();
+  await loadEvents();
+  if (perfData.length === 0) setTimeout(init, 2000);
+}
+setTimeout(init, 500);
+
+window.addEventListener('focus', () => { updateStatus(); loadPerfData(); });
+window.addEventListener('resize', () => { if (document.querySelector('.tab.active').dataset.tab === 'network') { destroyCharts(); rebuildCharts(); } });
+
+listen('starlink-update', () => {
+  updateStatus();
+  const active = document.querySelector('.tab.active').dataset.tab;
+  if (active === 'network') loadPerfData();
+  if (active === 'events') loadEvents();
+  if (active === 'info') loadInfo();
+});
+</script>
+</body>
+</html>

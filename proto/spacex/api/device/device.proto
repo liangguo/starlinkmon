@@ -1,0 +1,166 @@
+syntax = "proto3";
+package SpaceX.API.Device;
+
+service Device {
+  rpc Handle(Request) returns (Response);
+}
+
+message Request {
+  uint64 id = 1;
+  string target_id = 13;
+  uint64 epoch_id = 14;
+  oneof request {
+    GetStatusRequest get_status = 1004;
+    GetHistoryRequest get_history = 1007;
+    GetDeviceInfoRequest get_device_info = 1008;
+    DishGetObstructionMapRequest dish_get_obstruction_map = 2008;
+    GetDiagnosticsRequest get_diagnostics = 6000;
+  }
+}
+
+message Response {
+  uint64 id = 1;
+  uint64 api_version = 3;
+  oneof response {
+    GetDeviceInfoResponse get_device_info = 1004;
+    DishGetStatusResponse dish_get_status = 2004;
+    DishGetHistoryResponse dish_get_history = 2006;
+    DishGetObstructionMapResponse dish_get_obstruction_map = 2008;
+    DishGetDiagnosticsResponse dish_get_diagnostics = 6001;
+  }
+}
+
+message GetStatusRequest {}
+message GetHistoryRequest {}
+message GetDeviceInfoRequest {}
+message GetDiagnosticsRequest {}
+message GetDeviceInfoResponse {}
+message DishGetObstructionMapRequest {}
+
+message DishGetObstructionMapResponse {
+  uint32 num_rows = 1;
+  uint32 num_cols = 2;
+  repeated float snr = 3;
+}
+
+message DishGetStatusResponse {
+  DeviceInfo device_info = 1;
+  DeviceState device_state = 2;
+  float seconds_to_first_nonempty_slot = 1002;
+  float pop_ping_drop_rate = 1003;
+  DishObstructionStats obstruction_stats = 1004;
+  DishAlerts alerts = 1005;
+  float downlink_throughput_bps = 1007;
+  float uplink_throughput_bps = 1008;
+  float pop_ping_latency_ms = 1009;
+  bool stow_requested = 1010;
+  float boresight_azimuth_deg = 1011;
+  float boresight_elevation_deg = 1012;
+  DishOutage outage = 1014;
+  DishGpsStats gps_stats = 1015;
+  int32 eth_speed_mbps = 1016;
+  bool is_snr_above_noise_floor = 1018;
+  bool is_snr_persistently_low = 1022;
+  repeated string connected_routers = 1040;
+}
+
+message DeviceInfo {
+  string id = 1;
+  string hardware_version = 2;
+  string software_version = 3;
+  string country_code = 4;
+  int32 utc_offset_s = 5;
+  bool software_partitions_equal = 6;
+  bool is_dev = 7;
+  int32 bootcount = 8;
+  int32 anti_rollback_version = 9;
+  bool is_hitl = 10;
+  string manufactured_version = 11;
+  int64 generation_number = 12;
+  string boot_reason = 13;
+}
+
+message DeviceState {
+  uint64 uptime_s = 1;
+}
+
+message DishObstructionStats {
+  float fraction_obstructed = 1;
+  float valid_s = 4;
+  bool currently_obstructed = 5;
+  float avg_prolonged_obstruction_duration_s = 6;
+  float avg_prolonged_obstruction_interval_s = 7;
+  bool avg_prolonged_obstruction_valid = 8;
+  float time_obstructed = 9;
+  uint32 patches_valid = 10;
+}
+
+message DishAlerts {
+  bool motors_stuck = 1;
+  bool thermal_throttle = 2;
+  bool thermal_shutdown = 3;
+  bool mast_not_near_vertical = 4;
+  bool unexpected_location = 5;
+  bool slow_ethernet_speeds = 6;
+  bool roaming = 7;
+  bool install_pending = 8;
+  bool is_heating = 9;
+  bool power_supply_thermal_throttle = 10;
+  bool is_power_save_idle = 11;
+  bool moving_while_not_mobile = 12;
+  bool moving_too_fast_for_policy = 13;
+  bool dbf_telem_stale = 14;
+  bool low_motor_current = 15;
+  bool lower_signal_than_predicted = 16;
+}
+
+message DishOutage {
+  enum Cause {
+    UNKNOWN = 0;
+    BOOTING = 1;
+    STOWED = 2;
+    THERMAL_SHUTDOWN = 3;
+    NO_SCHEDULE = 4;
+    NO_SATS = 5;
+    OBSTRUCTED = 6;
+    NO_DOWNLINK = 7;
+    NO_PINGS = 8;
+    ACTUATOR_ACTIVITY = 9;
+    CABLE_TEST = 10;
+    SLEEPING = 11;
+    MOVING_TOO_FAST = 12;
+    SKY_SEARCH = 13;
+    INHIBIT_RF = 14;
+  }
+  Cause cause = 1;
+  int64 start_timestamp_ns = 2;
+  uint64 duration_ns = 3;
+  bool did_switch = 4;
+}
+
+message DishGpsStats {
+  bool gps_valid = 1;
+  uint32 gps_sats = 2;
+}
+
+message DishGetDiagnosticsResponse {
+  string id = 1;
+  string hardware_version = 2;
+  string software_version = 3;
+}
+
+message WifiGetStatusResponse {
+  float ping_drop_rate = 1004;
+  float ping_latency_ms = 1005;
+  float dish_ping_latency_ms = 1013;
+  float pop_ping_latency_ms = 1015;
+}
+
+message DishGetHistoryResponse {
+  uint64 current = 1;
+  repeated float pop_ping_drop_rate = 1001;
+  repeated float pop_ping_latency_ms = 1002;
+  repeated float downlink_throughput_bps = 1003;
+  repeated float uplink_throughput_bps = 1004;
+  repeated DishOutage outages = 1009;
+}
