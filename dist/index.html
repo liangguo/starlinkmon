@@ -48,7 +48,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #
 </head>
 <body>
 <div class="tabs">
-  <div class="tab active" data-tab="network">Network</div>
+  <div class="tab active" data-tab="network">Statistics</div>
   <div class="tab" data-tab="heatmap">Obstruction Map</div>
   <div class="tab" data-tab="events">Events</div>
   <div class="tab" data-tab="info">Info</div>
@@ -61,7 +61,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #
         <div class="stat-card"><div class="label">Download</div><div class="value" id="dl">--</div><div class="unit">Mbps</div></div>
         <div class="stat-card"><div class="label">Upload</div><div class="value" id="ul">--</div><div class="unit">Mbps</div></div>
         <div class="stat-card"><div class="label">Latency</div><div class="value" id="latency">--</div><div class="unit">ms</div></div>
-      <div class="stat-card" id="router-latency-card" style="display:none"><div class="label">Router</div><div class="value" id="router-latency">--</div><div class="unit">ms</div></div>
         <div class="stat-card"><div class="label">Drop</div><div class="value" id="drop">--</div><div class="unit">%</div></div>
         <div class="stat-card"><div class="label">Obstruction</div><div class="value" id="obstruction">--</div><div class="unit">%</div></div>
       </div>
@@ -74,9 +73,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #
     </div>
     <div style="flex:1;overflow-y:auto;">
       <div class="chart-box"><div class="chart-title">Bandwidth (Mbps)</div><div id="chart-bw"></div></div>
-      <div class="chart-box"><div class="chart-title">Latency (ms) — <span style="color:#FF9800">Starlink</span> / <span style="color:#29B6F6">Router</span></div><div id="chart-latency"></div></div>
+      <div class="chart-box"><div class="chart-title">Latency (ms)</div><div id="chart-latency"></div></div>
       <div class="chart-box"><div class="chart-title">Packet Loss (%)</div><div id="chart-drop"></div></div>
-      <div class="chart-box"><div class="chart-title">Obstruction (%)</div><div id="chart-obstruction"></div></div>
+      <div class="chart-box"><div class="chart-title">Power (W)</div><div id="chart-power"></div></div>
     </div>
   </div>
 
@@ -183,20 +182,19 @@ function rebuildCharts() {
   const dl = data.map(d => d.dl);
   const ul = data.map(d => d.ul);
   const lat = data.map(d => d.latency);
-  const rlat = data.map(d => d.router_latency || null);
   const drop = data.map(d => d.drop_rate * 100);
-  const obst = data.map(d => d.obstruction || 0);
+  const power = data.map(d => d.power || 0);
 
   if (charts.bw) {
     charts.bw.setData([ts, dl, ul]);
-    charts.latency.setData([ts, lat, rlat]);
+    charts.latency.setData([ts, lat]);
     charts.drop.setData([ts, drop]);
-    charts.obstruction.setData([ts, obst]);
+    charts.power.setData([ts, power]);
   } else {
     document.getElementById('chart-bw').innerHTML = '';
     document.getElementById('chart-latency').innerHTML = '';
     document.getElementById('chart-drop').innerHTML = '';
-    document.getElementById('chart-obstruction').innerHTML = '';
+    document.getElementById('chart-power').innerHTML = '';
 
     charts.bw = new uPlot(
       makeOpts('Bandwidth', [
@@ -208,10 +206,9 @@ function rebuildCharts() {
     );
     charts.latency = new uPlot(
       makeOpts('Latency', [
-        { label: 'Starlink', stroke: '#FF9800', width: 1.5 },
-        { label: 'Router', stroke: '#29B6F6', width: 1.5 },
+        { label: 'Latency', stroke: '#FF9800', width: 1.5 },
       ]),
-      [ts, lat, rlat],
+      [ts, lat],
       document.getElementById('chart-latency')
     );
     charts.drop = new uPlot(
@@ -221,12 +218,12 @@ function rebuildCharts() {
       [ts, drop],
       document.getElementById('chart-drop')
     );
-    charts.obstruction = new uPlot(
-      makeOpts('Obstruction', [
-        { label: 'Obstr %', stroke: '#AB47BC', width: 1.5, fill: 'rgba(171,71,188,0.1)' },
+    charts.power = new uPlot(
+      makeOpts('Power', [
+        { label: 'Watts', stroke: '#FFA726', width: 1.5, fill: 'rgba(255,167,38,0.1)' },
       ]),
-      [ts, obst],
-      document.getElementById('chart-obstruction')
+      [ts, power],
+      document.getElementById('chart-power')
     );
   }
 }
@@ -245,12 +242,6 @@ async function updateStatus() {
     document.getElementById('latency').textContent = s.latency_ms.toFixed(0);
     document.getElementById('drop').textContent = (s.drop_rate * 100).toFixed(2);
     document.getElementById('obstruction').textContent = s.obstruction_pct.toFixed(2);
-    if (s.router_ping_latency_ms != null) {
-      document.getElementById('router-latency-card').style.display = '';
-      document.getElementById('router-latency').textContent = s.router_ping_latency_ms.toFixed(0);
-    } else {
-      document.getElementById('router-latency-card').style.display = 'none';
-    }
   } catch(e) {}
 }
 
@@ -433,15 +424,17 @@ async function loadInfo() {
     const fmt = (s) => Math.floor(s/86400) > 0 ? `${Math.floor(s/86400)}d ${Math.floor((s%86400)/3600)}h` : `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
     grid.innerHTML = [
       ['Status', s.connected ? '🟢 Connected' : '🔴 Disconnected'],
+      ['Uptime', fmt(s.uptime_s)],
       ['Hardware', s.hardware_version],
       ['Software', s.software_version],
       ['Country', s.country_code],
       ['Ethernet', s.eth_speed_mbps + ' Mbps'],
       ['GPS Satellites', s.gps_sats + (s.gps_valid ? ' ✓' : ' ✗')],
+      ['SNR OK', s.snr_above_noise ? 'Yes' : 'No'],
       ['Azimuth', s.azimuth_deg.toFixed(1) + '°'],
       ['Elevation', s.elevation_deg.toFixed(1) + '°'],
-      ['SNR OK', s.snr_above_noise ? 'Yes' : 'No'],
-      ['Uptime', fmt(s.uptime_s)],
+      ['Obstruction', s.obstruction_pct.toFixed(2) + '%'],
+      ['Time Obstructed', (s.time_obstructed * 100).toFixed(4) + '%'],
     ].map(([l, v]) => `<div class="info-item"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('');
   } catch(e) {}
 }

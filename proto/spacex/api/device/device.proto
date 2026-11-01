@@ -163,4 +163,5 @@ message DishGetHistoryResponse {
   repeated float downlink_throughput_bps = 1003;
   repeated float uplink_throughput_bps = 1004;
   repeated DishOutage outages = 1009;
+  repeated float power_in = 1010;
 }

@@ -12,9 +12,10 @@ use tauri::{
     tray::TrayIconBuilder,
     image::Image,
 };
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, timeout, Duration, MissedTickBehavior};
 
 const STARLINK_ADDR: &str = "http://192.168.100.1:9200";
+const GRPC_TIMEOUT: Duration = Duration::from_secs(5);
 const BG_INTERVAL_SECS: u64 = 60;
 const PERF_RETENTION_HOURS: i64 = 24;
 const EVENT_RETENTION_HOURS: i64 = 176;
@@ -38,6 +39,7 @@ pub struct DishStatus {
     pub elevation_deg: f32,
     pub gps_valid: bool,
     pub gps_sats: u32,
+    pub time_obstructed: f32,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -56,7 +58,7 @@ pub struct PerfSample {
     pub latency: f32,
     pub drop_rate: f32,
     #[serde(default)]
-    pub obstruction: f32,
+    pub power: f32,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -145,16 +147,16 @@ fn format_timestamp_ns(ns: i64) -> String {
 }
 
 async fn poll_status(state: &SharedState) {
-    let client = match DeviceClient::connect(STARLINK_ADDR).await {
-        Ok(c) => c,
-        Err(_) => { state.live.lock().unwrap().status.connected = false; return; }
+    let client = match timeout(GRPC_TIMEOUT, DeviceClient::connect(STARLINK_ADDR)).await {
+        Ok(Ok(c)) => c,
+        _ => { state.live.lock().unwrap().status.connected = false; return; }
     };
     let mut client = client;
     let req = DeviceRequest {
         id: 1, target_id: String::new(), epoch_id: 0,
         request: Some(proto::request::Request::GetStatus(GetStatusRequest {})),
     };
-    if let Ok(resp) = client.handle(req).await {
+    if let Ok(Ok(resp)) = timeout(GRPC_TIMEOUT, client.handle(req)).await {
         if let Some(proto::response::Response::DishGetStatus(s)) = resp.into_inner().response {
             let di = s.device_info.as_ref();
             let status = DishStatus {
@@ -174,6 +176,7 @@ async fn poll_status(state: &SharedState) {
                 elevation_deg: s.boresight_elevation_deg,
                 gps_valid: s.gps_stats.as_ref().map_or(false, |g| g.gps_valid),
                 gps_sats: s.gps_stats.as_ref().map_or(0, |g| g.gps_sats),
+                time_obstructed: s.obstruction_stats.as_ref().map_or(0.0, |o| o.time_obstructed),
             };
             state.live.lock().unwrap().status = status;
         }
@@ -181,9 +184,9 @@ async fn poll_status(state: &SharedState) {
 }
 
 async fn poll_and_persist(state: &SharedState) {
-    let client = match DeviceClient::connect(STARLINK_ADDR).await {
-        Ok(c) => c,
-        Err(_) => { state.live.lock().unwrap().status.connected = false; return; }
+    let client = match timeout(GRPC_TIMEOUT, DeviceClient::connect(STARLINK_ADDR)).await {
+        Ok(Ok(c)) => c,
+        _ => { state.live.lock().unwrap().status.connected = false; return; }
     };
     let mut client = client;
 
@@ -192,7 +195,7 @@ async fn poll_and_persist(state: &SharedState) {
         id: 1, target_id: String::new(), epoch_id: 0,
         request: Some(proto::request::Request::GetStatus(GetStatusRequest {})),
     };
-    if let Ok(resp) = client.handle(req).await {
+    if let Ok(Ok(resp)) = timeout(GRPC_TIMEOUT, client.handle(req)).await {
         if let Some(proto::response::Response::DishGetStatus(s)) = resp.into_inner().response {
             let di = s.device_info.as_ref();
             let status = DishStatus {
@@ -212,6 +215,7 @@ async fn poll_and_persist(state: &SharedState) {
                 elevation_deg: s.boresight_elevation_deg,
                 gps_valid: s.gps_stats.as_ref().map_or(false, |g| g.gps_valid),
                 gps_sats: s.gps_stats.as_ref().map_or(0, |g| g.gps_sats),
+                time_obstructed: s.obstruction_stats.as_ref().map_or(0.0, |o| o.time_obstructed),
             };
             state.live.lock().unwrap().status = status;
         }
@@ -222,7 +226,7 @@ async fn poll_and_persist(state: &SharedState) {
         id: 2, target_id: String::new(), epoch_id: 0,
         request: Some(proto::request::Request::GetHistory(GetHistoryRequest {})),
     };
-    if let Ok(resp) = client.handle(req).await {
+    if let Ok(Ok(resp)) = timeout(GRPC_TIMEOUT, client.handle(req)).await {
         if let Some(proto::response::Response::DishGetHistory(h)) = resp.into_inner().response {
             let mut persisted = state.persisted.lock().unwrap();
 
@@ -239,7 +243,7 @@ async fn poll_and_persist(state: &SharedState) {
                         ul: h.uplink_throughput_bps.get(i).copied().unwrap_or(0.0) / 1_000_000.0,
                         latency: h.pop_ping_latency_ms.get(i).copied().unwrap_or(0.0),
                         drop_rate: h.pop_ping_drop_rate.get(i).copied().unwrap_or(0.0),
-                        obstruction: state.live.lock().unwrap().status.obstruction_pct,
+                        power: h.power_in.get(i).copied().unwrap_or(0.0),
                     });
                 }
             }
@@ -264,7 +268,7 @@ async fn poll_and_persist(state: &SharedState) {
         id: 3, target_id: String::new(), epoch_id: 0,
         request: Some(proto::request::Request::DishGetObstructionMap(proto::DishGetObstructionMapRequest {})),
     };
-    if let Ok(resp) = client.handle(req).await {
+    if let Ok(Ok(resp)) = timeout(GRPC_TIMEOUT, client.handle(req)).await {
         if let Some(proto::response::Response::DishGetObstructionMap(m)) = resp.into_inner().response {
             state.live.lock().unwrap().obstruction_map = ObstructionMap {
                 num_rows: m.num_rows, num_cols: m.num_cols, snr: m.snr,
@@ -375,7 +379,9 @@ pub fn run() {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mut status_ticker = interval(Duration::from_secs(1));
+                status_ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
                 let mut extras_ticker = interval(Duration::from_secs(BG_INTERVAL_SECS));
+                extras_ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
                 // Initial full poll
                 let state = handle.state::<SharedState>();
